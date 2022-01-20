@@ -1,0 +1,450 @@
+<?php namespace Dva\Social\Controllers;
+
+use Dva\Social\Core\DB;
+use Dva\Social\Models\BaseModel;
+
+class OaiController extends ArticleController
+{
+    protected $errors = [
+        "badArgument" => "The request includes illegal arguments.",
+        "badVerb" => "Value of the verb argument is not a legal OAI-PMH verb, the verb argument is missing, or the verb argument is repeated.",
+        "badResumptionToken" => "The value of the resumptionToken argument is invalid or expired.",
+        "cannotDisseminateFormat" => "The metadata format identified by the value given for the metadataPrefix argument is not supported by the item or by the repository.",
+        "noSetHierarchy" => "The repository does not support sets.",
+        "idDoesNotExist" => "The value of the identifier argument is unknown or illegal in this repository.",
+        "badResumptionToken" => "The value of the resumptionToken argument is invalid or expired.",
+        "noRecordsMatch" => "The combination of the values of the from, until and metadataPrefix arguments results in an empty list.",
+    ];
+    protected $metadataPrefixes = [
+        "oai_dc" => 'doublinCore',
+    ];
+    protected $verbAttr = [
+        "ListRecords" => [
+            "verb" => true,
+            "from" => true,
+            "until" => true,
+            "metadataPrefix" => true,
+        ],
+        "ListMetadataFormats" => [
+            "verb" => true,
+            "identifier" => true,
+        ],
+        "GetRecord" => [
+            "verb" => true,
+            "metadataPrefix" => true,
+            "identifier" => true,
+        ],
+        "Identify" => [
+            "verb" => true,
+        ],
+        "ListIdentifiers" => [
+            "verb" => true,
+            "from" => true,
+            "until" => true,
+            "metadataPrefix" => true,
+            "identifier" => true,
+        ],
+    ];
+
+    protected $metadataFormats = [
+        "oai_dc" => [
+            "schema" => "http://www.openarchives.org/OAI/2.0/oai_dc.xsd",
+            "metadataNamespace" => "http://www.openarchives.org/OAI/2.0/oai_dc/",
+        ],
+    ];
+
+    public function requestMethod() //Забирает пост и гет и передает на анализ requestAnalysis()
+
+    {
+        if (count($_GET)) {
+            $this->requestAnalysis($_GET);
+        } elseif (count($_POST)) {
+            $this->requestAnalysis($_GET);
+        } else {
+            $this->errorMessage("badVerb");
+        }
+    }
+
+    protected function requestAnalysis(array $requestData) //Анализирует запрос и отдает конкретному методу
+
+    {
+        switch ($requestData['verb']) {
+            case 'Identify':
+                $this->getIdentify($requestData);
+                break;
+
+            case 'GetRecord':
+                $this->getRecord($requestData);
+                break;
+
+            case 'ListRecords':
+                $this->listRecords($requestData);
+                break;
+
+            case 'ListIdentifiers':
+                $this->listIdentifiers($requestData);
+                break;
+
+            case 'ListSets':
+                $this->errorMessage("noSetHierarchy");
+                break;
+
+            case 'ListMetadataFormats':
+                $this->listMetadataFormats($requestData);
+                break;
+
+            case 'test':
+                $this->test($requestData);
+                break;
+
+            default:
+                $this->errorMessage('badVerb');
+                break;
+        }
+    }
+    protected function getIdentify($requestData) // Ответ на запрос verb = Identify
+
+    {
+        if (count($requestData) !== 1) {
+            $this->errorMessage("badArgument");
+            return false;
+        }
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $reques = $this->respDate($requestData, $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+
+        $identify = $dom->createElement('Identify');
+        $oai_pmh->appendChild($identify);
+        $repositoryName = $dom->createElement('repositoryName', 'Scientific Network Journal "Bulletin Social-Economic and Humanitarian Research"');
+        $identify->appendChild($repositoryName);
+        $baseURL = $dom->createElement('baseURL', 'http://bulletensocial.com/archive/en/oai');
+        $identify->appendChild($baseURL);
+        $protocolVersion = $dom->createElement('protocolVersion', '2.0');
+        $identify->appendChild($protocolVersion);
+        $adminEmail = $dom->createElement('adminEmail', 'bogdan.ershov@yandex.ru');
+        $identify->appendChild($adminEmail);
+        $earliestDatestamp = $dom->createElement('earliestDatestamp', '2018-02-05');
+        $identify->appendChild($earliestDatestamp);
+        $deletedRecord = $dom->createElement('deletedRecord', 'no');
+        $identify->appendChild($deletedRecord);
+        $granularity = $dom->createElement('granularity', 'YYYY-MM-DD');
+        $identify->appendChild($granularity);
+
+        $this->getBaseXML($dom, $oai_pmh, $requestData);
+    }
+
+    protected function respDate($request, $oai_pmh, $dom)
+    {
+        if (isset($request["resumptionToken"])) {
+            $this->errorMessage("badResumptionToken");
+            die;
+        }
+        $responseDate = $dom->createElement('responseDate', date("Y-m-d\TH:i:s\Z", time()));
+        $reques = $dom->createElement('request', 'http://bulletensocial.com/archive/en/oai');
+        foreach ($request as $key => $value) {
+
+            if (!array_key_exists($key, $this->verbAttr[$request['verb']])) {
+                $this->errorMessage("badArgument");
+                die;
+            }
+
+            $attr = $dom->createAttribute($key);
+            $attr->value = $value;
+            $reques->appendChild($attr);
+
+        }
+        return [$responseDate, $reques];
+    }
+
+    protected function getBaseXML($dom, $oai_pmh, array $reques) // Общая для всех разметка вынесена в отдельный метод
+
+    {
+
+        $dom->preserveWhiteSpace = false;
+        $dom->formatOutput = true;
+        $dom->preserveWhiteSpace = false;
+
+        $dom->appendChild($oai_pmh);
+        $xmlns = $dom->createAttribute('xmlns');
+        $xmlns->value = "http://www.openarchives.org/OAI/2.0/";
+        $oai_pmh->appendChild($xmlns);
+        $xmlns_xsi = $dom->createAttribute('xmlns:xsi');
+        $xmlns_xsi->value = "http://www.w3.org/2001/XMLSchema-instance";
+        $oai_pmh->appendChild($xmlns_xsi);
+        $xsi_sl = $dom->createAttribute('xsi:schemaLocation');
+        $xsi_sl->value = "http://www.openarchives.org/OAI/2.0/ http://www.openarchives.org/OAI/2.0/OAI-PMH.xsd";
+        $oai_pmh->appendChild($xsi_sl);
+        $dom = $dom->saveXML();
+        header("Content-Type:text/xml");
+        echo $dom;
+    }
+    protected function getRecord($request)
+    {
+        if (!$request['metadataPrefix'] || !$this->metadataPrefixes[$request['metadataPrefix']]) {
+            $this->errorMessage("cannotDisseminateFormat");
+            return false;
+        }
+
+        $id = str_replace("oai:bulletensocial.com:", "", $request['identifier']);
+
+        $article = is_numeric(substr($id, -2, 2)) ? +substr($id, -2, 2) : false;
+        $number = is_numeric(substr($id, 0, 3)) ? +substr($id, 0, 3) : false;
+        $articleMeta = $this->getOne($article, $number);
+
+        if (!$articleMeta || strlen($id) != 5) {
+            $this->errorMessage("idDoesNotExist");
+        }
+        $func = $this->metadataPrefixes[$request['metadataPrefix']];
+
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $reques = $this->respDate($request, $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+
+        $getRecord = $dom->CreateElement("GetRecord");
+        $oai_pmh->appendChild($getRecord);
+        $record = $this->$func($articleMeta, $dom);
+        $getRecord->appendChild($record);
+
+        $this->getBaseXML($dom, $oai_pmh, $request);
+    }
+
+    protected function completedLists($request) //Отдает полный лист, или выборку по параметрам
+
+    {
+        if ($request['until'] || $request['from']) {
+            $until = ($request['until'] && $request['until'] != "") ? $request['until'] : date("Y-m-d", time());
+            $from = ($request['from'] && $request['from'] != "") ? $request['from'] : "2019-02-01";
+            $articles = $this->getOnDate($from, $until);
+        } else {
+            $articles = $this->getAll();
+        }
+        return $articles;
+    }
+
+    protected function errorMessage($message)
+    {
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $reques = $this->respDate([], $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+
+        $errTag = $dom->createElement('error', $this->errors[$message]);
+        $errAttr = $dom->createAttribute("code");
+        $errAttr->value = $message;
+        $errTag->appendChild($errAttr);
+        $oai_pmh->appendChild($errTag);
+        $this->getBaseXML($dom, $oai_pmh, []);
+        die;
+
+    }
+
+    protected function listRecords($request)
+    {
+        if (!$request['metadataPrefix'] || !$this->metadataPrefixes[$request['metadataPrefix']]) {
+            $this->errorMessage("cannotDisseminateFormat");
+            return false;
+        }
+        if (isset($request['set'])) {
+            $this->errorMessage("noSetHierarchy");
+            return false;
+        }
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $reques = $this->respDate($request, $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+
+        $ListRecords = $dom->createElement("ListRecords");
+        $oai_pmh->appendChild($ListRecords);
+
+        $func = $this->metadataPrefixes[$request['metadataPrefix']];
+        $articleList = $this->completedLists($request);
+        if (!$articleList) {
+            $this->errorMessage("noRecordsMatch");
+        }
+
+        foreach ($articleList as $value) {
+            $record = $this->$func($value, $dom);
+            $ListRecords->appendChild($record);
+        }
+        $this->getBaseXML($dom, $oai_pmh, $request);
+    }
+
+    protected function listIdentifiers($request)
+    {
+        if (isset($request['set'])) {
+            $this->errorMessage("noSetHierarchy");
+            return false;
+        }
+        if (!$request['metadataPrefix'] || !$this->metadataPrefixes[$request['metadataPrefix']]) {
+            $this->errorMessage("cannotDisseminateFormat");
+            return false;
+        }
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $reques = $this->respDate($request, $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+
+        $listIdentifiers = $dom->createElement("ListIdentifiers");
+        $oai_pmh->appendChild($listIdentifiers);
+
+        if ($request['set']) {
+            $this->errorMessage("noSetHierarchy");
+            return false;
+        }
+        if (!$request['metadataPrefix'] || !$this->metadataPrefixes[$request['metadataPrefix']]) {
+            $this->errorMessage("cannotDisseminateFormat");
+            return false;
+        }
+
+        $func = $this->metadataPrefixes[$request['metadataPrefix']] ? $this->metadataPrefixes[$request['metadataPrefix']] : "doublinCore";
+        $articleList = $this->completedLists($request);
+        if (!$articleList) {
+            $this->errorMessage("noRecordsMatch");
+        }
+
+        foreach ($articleList as $value) {
+            $header = $this->$func($value, $dom, true);
+            $listIdentifiers->appendChild($header);
+        }
+        $this->getBaseXML($dom, $oai_pmh, $request);
+    }
+
+    protected function listMetadataFormats($request)
+    {
+        if (isset($request['identifier'])) {
+            $id = str_replace("oai:bulletensocial.com:", "", $request['identifier']);
+
+            $article = is_numeric(substr($id, -2, 2)) ? +substr($id, -2, 2) : false;
+            $number = is_numeric(substr($id, 0, 3)) ? +substr($id, 0, 3) : false;
+            $articleMeta = $this->getOne($article, $number);
+
+            if (!$articleMeta || strlen($id) != 5) {
+                $this->errorMessage("idDoesNotExist");
+            }
+        }
+
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+
+        $listMetadataFormats = $dom->createElement("ListMetadataFormats");
+        $reques = $this->respDate($request, $oai_pmh, $dom);
+        $oai_pmh->appendChild($reques[0]);
+        $oai_pmh->appendChild($reques[1]);
+        $oai_pmh->appendChild($listMetadataFormats);
+
+        foreach ($this->metadataPrefixes as $key => $mdp) {
+            $metadataFormat = $dom->createElement("metadataFormat");
+            $listMetadataFormats->appendChild($metadataFormat);
+            $metadataPrefix = $dom->createElement("metadataPrefix", $key);
+            $metadataFormat->appendChild($metadataPrefix);
+            $schema = $dom->createElement("schema", $this->metadataFormats[$key]["schema"]);
+            $metadataFormat->appendChild($schema);
+            $metadataNamespace = $dom->createElement("metadataNamespace", $this->metadataFormats[$key]["metadataNamespace"]);
+            $metadataFormat->appendChild($metadataNamespace);
+        }
+
+        $this->getBaseXML($dom, $oai_pmh, $request);
+
+    }
+
+    protected function getAll()
+    {
+        $mPost = new baseModel(DB::getConnect(), $this->endTable);
+        return $mPost->getAll();
+    }
+
+    protected function getOnDate($from = "2017-09-01", $until)
+    {
+        $mPost = new baseModel(DB::getConnect(), $this->endTable);
+        return $mPost->getOnDate($from, $until);
+    }
+
+    protected function getOne($number, $article)
+    {
+        $mPost = new baseModel(DB::getConnect(), $this->endTable);
+        return $mPost->getByArticle($number, $article);
+    }
+
+    protected function doublinCore($r, $dom, $onlyHeader = false)
+    {
+        $record = $dom->createElement("record");
+        $header = $dom->createElement("header");
+        $idNumber = str_pad($r['number1'], 3, "000000", STR_PAD_LEFT);
+        $idArticle = (+$r['article1'] >= 10) ? $r['article1'] : ("0" . $r['article1']);
+        $identifier = $dom->createElement("identifier", sprintf("oai:bulletensocial.com:%s%s", $idNumber, $idArticle));
+        $header->appendChild($identifier);
+        $datestamp = $dom->createElement("datestamp", sprintf("%s", $r['dateArt']));
+        $header->appendChild($datestamp);
+
+        if ($onlyHeader) {return $header;}
+
+        $record->appendChild($header);
+        $metadata = $dom->createElement("metadata");
+        $record->appendChild($metadata);
+        $oai_dc = $dom->createElement("oai_dc:dc");
+        $metadata->appendChild($oai_dc);
+        $xmlns = $dom->createAttribute("xmlns:oai_dc");
+        $xmlns->value = "http://www.openarchives.org/OAI/2.0/oai_dc/";
+        $oai_dc->appendChild($xmlns);
+        $xmlns = $dom->createAttribute("xmlns:dc");
+        $xmlns->value = "http://purl.org/dc/elements/1.1/";
+        $oai_dc->appendChild($xmlns);
+        $xmlns = $dom->createAttribute("xmlns:xsi");
+        $xmlns->value = "http://www.w3.org/2001/XMLSchema-instance";
+        $oai_dc->appendChild($xmlns);
+        $xmlns = $dom->createAttribute("xsi:schemaLocation");
+        $xmlns->value = "http://www.openarchives.org/OAI/2.0/oai_dc/ http://www.openarchives.org/OAI/2.0/oai_dc.xsd";
+        $oai_dc->appendChild($xmlns);
+        $dc_title = $dom->createElement("dc:title", sprintf("%s", $r['nameArticle']));
+        $oai_dc->appendChild($dc_title);
+
+        foreach ($r['authors'] as $value) {
+            $dc_creator = $dom->createElement("dc:creator", "{$value['surename']}, comp{$value['name']}");
+            $oai_dc->appendChild($dc_creator);
+        }
+
+        $dc_type = $dom->createElement("dc:type", "text");
+        $oai_dc->appendChild($dc_type);
+        $dc_source = $dom->createElement("dc:source", "bulletensocial.com");
+        $oai_dc->appendChild($dc_source);
+        $dc_language = $dom->createElement("dc:language", "en");
+        $oai_dc->appendChild($dc_language);
+        $dc_identifier = $dom->createElement("dc:identifier", sprintf("http://bulletensocial.com/archive/en/%s/%s", $r["number1"], $r["article1"]));
+        $oai_dc->appendChild($dc_identifier);
+        $dc_date = $dom->createElement("dc:date", sprintf("%s", $r["dateArt"]));
+        $oai_dc->appendChild($dc_date);
+
+        $key = explode(", ", str_replace(".", "", $r['keywords']));
+        foreach ($key as $value) {
+            $dc_subject = $dom->createElement("dc:subject", sprintf("%s", $value));
+            $oai_dc->appendChild($dc_subject);
+        }
+        $dc_description = $dom->createElement("dc:description", sprintf("%s", $r["annotation"]));
+        $oai_dc->appendChild($dc_description);
+        return $record;
+
+    }
+
+    public function test($r)
+    {
+        $dom = new \DOMDocument('1.0', 'utf-8');
+        $oai_pmh = $dom->createElement('OAI-PMH');
+        $dom->appendChild($oai_pmh);
+        $dom = $dom->saveXML();
+        header("Content-Type:text/xml");
+        echo $dom;
+    }
+
+}
